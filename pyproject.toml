@@ -1,0 +1,33 @@
+[project]
+name = "brownbear"
+version = "0.1.0"
+description = "IF3170 Tugas Besar 2 - Supervised Learning (KNN, DTL, Logistic Regression, SVM, Naive Bayes from scratch)"
+readme = "README.md"
+authors = [
+    { name = "ZahranAlvan", email = "zahranalvan2901@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "imageio>=2.38.1",
+    "imageio-ffmpeg>=0.8.0",
+    "matplotlib>=3.11.2",
+    "networkx>=3.7",
+    "numpy>=2.5.4",
+    "pandas>=3.1.0",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "seaborn>=0.13.2",
+    "tqdm>=4.70.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.10,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
