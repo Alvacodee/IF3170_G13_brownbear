@@ -7,14 +7,43 @@ from .base import BaseModel
 
 # Source: https://scikit-learn.org/stable/modules/naive_bayes.html#categorical-naive-bayes
 class NaiveBayes(BaseModel):
-    """Categorical Naive Bayes with additive smoothing."""
+    """Categorical Naive Bayes classifier with additive smoothing.
+
+    Parameters
+    ----------
+    alpha : float, default=1.0
+        Smoothing strength added to every class-category count. Must be
+        finite and positive.
+
+    Notes
+    -----
+    Input values must be nonnegative integer category codes. Category code 0
+    is reserved as the fallback for values that were not seen during fitting.
+    """
 
     def __init__(self, alpha: float = 1.0) -> None:
+        """Create a categorical Naive Bayes classifier.
+
+        Parameters
+        ----------
+        alpha : float, default=1.0
+            Smoothing strength for conditional category probabilities.
+        """
         if not np.isfinite(alpha) or alpha <= 0:
             raise ValueError("alpha must be finite and positive")
         self.alpha = float(alpha)
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> Self:
+        """Fit class priors and smoothed conditional probabilities.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (n_samples, n_features)
+            Integer-encoded categorical features. Use a reserved category 0
+            for missing or unknown values.
+        y : np.ndarray of shape (n_samples,)
+            Class labels.
+        """
         X = self._validate_X(X)
         y = np.asarray(y)
 
@@ -53,10 +82,12 @@ class NaiveBayes(BaseModel):
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
+        """Predict the most likely class for each row in ``X``."""
         scores = self._joint_log_likelihood(X)
         return self.classes_[np.argmax(scores, axis=1)]
 
     def predict_log_proba(self, X: np.ndarray) -> np.ndarray:
+        """Return normalized class log-probabilities for each row in ``X``."""
         scores = self._joint_log_likelihood(X)
         maximum = scores.max(axis=1, keepdims=True)
         log_normalizer = maximum + np.log(
@@ -65,14 +96,14 @@ class NaiveBayes(BaseModel):
         return scores - log_normalizer
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """Return normalized class probabilities for each row in ``X``."""
         return np.exp(self.predict_log_proba(X))
 
     def _joint_log_likelihood(self, X: np.ndarray) -> np.ndarray:
         self._check_is_fitted()
-        X = self._validate_X(X, expected_features=self.n_features_in_)
-
-        if np.any(X >= self.n_categories_):
-            raise ValueError("X contains categories that were not fitted")
+        X = self._validate_X(X, expected_features=self.n_features_in_).copy()
+        for feature_index, category_count in enumerate(self.n_categories_):
+            X[X[:, feature_index] >= category_count, feature_index] = 0
 
         scores = np.tile(self.class_log_prior_, (len(X), 1))
         for feature_index, log_probability in enumerate(self.feature_log_prob_):
@@ -113,4 +144,7 @@ if __name__ == "__main__":
     np.testing.assert_array_equal(model.predict(X_train), y_train)
     np.testing.assert_allclose(model.predict_proba(X_train).sum(axis=1), 1)
     assert np.isfinite(model.predict_log_proba(X_train)).all()
-    print("PASS: categorical likelihoods, predictions, and probabilities")
+
+    unknown = np.array([[99, 99]])
+    assert model.predict(unknown).shape == (1,)
+    print("PASS: categorical likelihoods, predictions, probabilities, and fallback categories")
