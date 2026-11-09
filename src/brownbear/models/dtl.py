@@ -9,6 +9,7 @@ import numpy as np
 from .base import BaseModel
 
 
+# CART dan Gini: https://scikit-learn.org/stable/modules/tree.html
 @dataclass
 class _Node:
     """A CART node; leaves have ``feature is None``."""

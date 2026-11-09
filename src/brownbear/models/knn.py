@@ -22,6 +22,7 @@ class KNN(BaseModel):
         diabaikan untuk jenis jarak lainnya.
     """
 
+    # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.pairwise_distances_chunked.html
     _BATCH_SIZE = 128
 
     def __init__(
@@ -151,6 +152,7 @@ class KNN(BaseModel):
             return neighbor_distances, indices
         return indices
 
+    # Bobot jarak: https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """Menghitung proporsi suara tiap kelas sesuai urutan ``classes_``.
 

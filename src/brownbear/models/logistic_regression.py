@@ -6,6 +6,8 @@ import numpy as np
 from .base import BaseModel
 
 
+# Optimasi proximal: https://web.stanford.edu/~boyd/papers/prox_algs.html
+# Akselerasi: https://epubs.siam.org/doi/10.1137/080716542
 class LogisticRegression(BaseModel):
     """Binary weighted logistic regression with proximal L1/L2 optimization.
 
