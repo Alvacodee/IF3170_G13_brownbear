@@ -1,72 +1,58 @@
 # IF3170_G13_brownbear
 
-Tugas Besar 2 IF3170 Inteligensi Artifisial 2026/2027 - **Supervised Learning**.
+Tugas Besar 2 IF3170 Inteligensi Artifisial 2026/2027: klasifikasi pembatalan pemesanan penginapan. KNN, Decision Tree Learning, Logistic Regression, SVM, dan Naive Bayes diimplementasikan dari awal dan dibandingkan dengan scikit-learn.
 
-Implementasi *from scratch* algoritma KNN, Decision Tree Learning, Logistic Regression (L1/L2/Elastic Net), SVM (linear/polynomial/gaussian), dan Naive Bayes untuk memprediksi pembatalan pemesanan penginapan, serta perbandingannya dengan scikit-learn.
+## Struktur repo
 
-## Struktur Repository
-
-```
+```text
 .
-├── data/                 # dataset Kaggle
-├── docs/                 # laporan (.pdf)
-├── output/               # hasil run algoritma (model tersimpan, submission, gambar)
+├── data/                         # train, test, dan contoh submission
+├── docs/                         # laporan
+├── output/                       # model, gambar, dan submission hasil run
 ├── src/
-│   ├── Notebook_Template_Tugas_Besar_2_IF3170_Inteligensi_Artifisial_2026_2027.ipynb
+│   ├── IF3170_G13_brownbear.ipynb
 │   └── brownbear/
+│       ├── __init__.py
 │       ├── preprocessing.py
-│       └── models/       # KNN, DTL, LogReg, SVM, Naive Bayes (from scratch)
+│       └── models/
+│           ├── __init__.py
+│           ├── base.py           # fit/predict dan save/load bersama
+│           ├── knn.py
+│           ├── dtl.py
+│           ├── logistic_regression.py
+│           ├── svm.py
+│           └── naive_bayes.py
 ├── pyproject.toml
 └── uv.lock
 ```
 
-## Setup
-
-### Prasyarat
-
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) terlebih dahulu. Cek apakah sudah terpasang dengan `uv --version`. Jika belum, jalankan perintah sesuai sistem operasi:
-
-**Windows (PowerShell)**
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-**macOS dan Linux**
+## Persiapan
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Buka ulang terminal setelah instalasi agar perintah `uv` dikenali.
-
-### Instalasi Project
-
-```bash
-git clone https://github.com/<username>/IF3170_G13_brownbear.git
-cd IF3170_G13_brownbear
 uv sync
+uv run jupyter notebook
 ```
 
-`uv sync` akan memasang Python 3.13 (jika belum ada), membuat `.venv`, dan memasang semua dependency sesuai `uv.lock`.
+Dependensi dikelola melalui `pyproject.toml` dan dikunci di `uv.lock`. Preprocessing di-fit pada data latih, lalu dipakai untuk mentransformasi data validasi dan data uji.
 
-## Cara Menjalankan
+## Referensi implementasi eksternal
 
-```bash
-# Jupyter
-uv run jupyter notebook src/IF3170_G13_brownbear
-```
+- [CART dan Gini](https://scikit-learn.org/stable/modules/tree.html)
+- [KNN berbobot jarak](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html) dan [pemrosesan jarak per batch](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.pairwise_distances_chunked.html)
+- [Optimasi proximal](https://web.stanford.edu/~boyd/papers/prox_algs.html) dan [akselerasi](https://epubs.siam.org/doi/10.1137/080716542) untuk Logistic Regression
+- [Pemilihan working set orde dua](https://jmlr.org/papers/v6/fan05a.html) untuk SVM
+- [Naive Bayes kategorikal](https://scikit-learn.org/stable/modules/naive_bayes.html#categorical-naive-bayes)
+- [Preprocessing dan split](https://scikit-learn.org/stable/modules/compose.html)
+- [Jarak campuran numerik dan kategorikal](https://doi.org/10.2307/2528823) untuk penalti jarak KNN
+- [Imputasi berbasis tetangga terdekat](https://doi.org/10.1080/713827181) untuk `days_before_arrival`
+- [Coordinate descent](https://doi.org/10.1007/s10107-015-0892-3) untuk pencarian bobot fitur KNN
 
-Atau buka `src/IF3170_G13_brownbear.ipynb` di VS Code dan pilih kernel `.venv`.
+## Anggota
 
-Menambah dependency baru: `uv add <nama-paket>` lalu commit `pyproject.toml` dan `uv.lock`.
-
-## Pembagian Tugas
-
-| NIM | Nama | Tugas |
-|-----|------|-------|
-| 13524016    | Wafiq Hibban Robbany     |       |
-| 13524025    | Moh. Hafizh Irham Perdana     |       |
-| 13524054    | Wildan Abdurrahman Ghazali     |       |
-| 13524070    | A. Fawwaz Azam Wicaksono     |       |
-| 13524124    | Zahran Alvan Putra Winarko     |       |
+| NIM | Nama |
+|-----|------|
+| 13524016 | Wafiq Hibban Robbany |
+| 13524025 | Moh. Hafizh Irham Perdana |
+| 13524054 | Wildan Abdurrahman Ghazali |
+| 13524070 | A. Fawwaz Azam Wicaksono |
+| 13524124 | Zahran Alvan Putra Winarko |
