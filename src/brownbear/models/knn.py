@@ -20,6 +20,17 @@ class KNN(BaseModel):
     p : float, bawaan=2.0
         Pangkat Minkowski yang bernilai hingga dan minimal 1;
         diabaikan untuk jenis jarak lainnya.
+    vote_power : float, bawaan=1.0
+        Pangkat kebalikan jarak pada ``weights="distance"``.
+    threshold : float atau None, bawaan=None
+        Ambang peluang kelas positif untuk klasifikasi biner; ``None`` memakai suara terbanyak.
+    mismatch_groups : sequence of (list[int], float), bawaan=()
+        Kelompok kolom diskret dan penaltinya. Penalti ditambahkan sekali jika ada
+        kolom kelompok yang berbeda. Nilai kosong tidak dihitung berbeda.
+    tolerances : sequence of (int, float, float), bawaan=()
+        Kolom, toleransi, dan penalti. Penalti ditambahkan jika selisih melebihi toleransi.
+
+    Kolom yang dipakai penalti tidak ikut dihitung pada ``metric`` dan boleh berisi NaN.
     """
 
     # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.pairwise_distances_chunked.html
@@ -31,11 +42,19 @@ class KNN(BaseModel):
         metric: str = "euclidean",
         weights: str = "uniform",
         p: float = 2.0,
+        vote_power: float = 1.0,
+        threshold: float | None = None,
+        mismatch_groups: tuple = (),
+        tolerances: tuple = (),
     ) -> None:
         self.k = k
         self.metric = metric
         self.weights = weights
         self.p = p
+        self.vote_power = vote_power
+        self.threshold = threshold
+        self.mismatch_groups = mismatch_groups
+        self.tolerances = tolerances
         self._validate_parameters()
 
     def _validate_parameters(self) -> None:
@@ -52,9 +71,20 @@ class KNN(BaseModel):
             or self.p < 1
         ):
             raise ValueError("p must be a finite number >= 1")
+        if not np.isfinite(self.vote_power) or self.vote_power <= 0:
+            raise ValueError("vote_power must be a positive finite number")
+        if self.threshold is not None and not 0 < self.threshold < 1:
+            raise ValueError("threshold must be None or between 0 and 1")
+        if any(penalty < 0 for _, penalty in self.mismatch_groups) or any(
+            tolerance < 0 or penalty < 0 for _, tolerance, penalty in self.tolerances
+        ):
+            raise ValueError("Penalties and tolerances must be nonnegative")
 
-    @staticmethod
-    def _validate_X(X: np.ndarray) -> np.ndarray:
+    def _penalty_columns(self) -> list[int]:
+        columns = [column for group, _ in self.mismatch_groups for column in group]
+        return columns + [column for column, _, _ in self.tolerances]
+
+    def _validate_X(self, X: np.ndarray) -> np.ndarray:
         raw = np.asarray(X)
         if np.iscomplexobj(raw):
             raise ValueError("X must contain real numeric features")
@@ -64,7 +94,10 @@ class KNN(BaseModel):
             raise ValueError("X must contain numeric features; encode categories first") from exc
         if array.ndim != 2 or array.shape[1] == 0:
             raise ValueError("X must be a 2D array with at least one feature")
-        if not np.isfinite(array).all():
+        penalty = self._penalty_columns()
+        if penalty and max(penalty) >= array.shape[1]:
+            raise ValueError("Penalty columns must exist in X")
+        if not np.isfinite(np.delete(array, penalty, axis=1)).all() or np.isinf(array).any():
             raise ValueError("X must contain only finite values; impute missing values first")
         return array
 
@@ -84,6 +117,7 @@ class KNN(BaseModel):
         if self.k > len(X_array):
             raise ValueError("k must not exceed the number of training rows")
         classes, encoded_y = np.unique(y_array, return_inverse=True)
+        self.distance_columns_ = np.setdiff1d(np.arange(X_array.shape[1]), self._penalty_columns())
         self.X_train_ = X_array.copy()
         self.y_train_ = y_array.copy()
         self.classes_ = classes
@@ -109,7 +143,7 @@ class KNN(BaseModel):
         difference = np.empty_like(distances)
         with np.errstate(over="raise", invalid="raise"):
             try:
-                for feature in range(self.n_features_in_):
+                for feature in self.distance_columns_:
                     np.subtract(X[:, feature, None], self.X_train_[None, :, feature], out=difference)
                     np.abs(difference, out=difference)
                     if exponent != 1:
@@ -119,6 +153,15 @@ class KNN(BaseModel):
                     np.power(distances, 1.0 / exponent, out=distances)
             except FloatingPointError as exc:
                 raise ValueError("Distance overflow; scale features before using KNN") from exc
+        for columns, penalty in self.mismatch_groups:
+            differs = np.zeros(distances.shape, dtype=bool)
+            for column in columns:
+                query, train = X[:, column, None], self.X_train_[None, :, column]
+                differs |= (query != train) & ~np.isnan(query) & ~np.isnan(train)
+            distances += penalty * differs
+        # Perbandingan dengan NaN bernilai False sehingga nilai kosong tidak diberi penalti.
+        for column, tolerance, penalty in self.tolerances:
+            distances += penalty * (np.abs(X[:, column, None] - self.X_train_[None, :, column]) > tolerance)
         return distances
 
     def kneighbors(
@@ -175,7 +218,7 @@ class KNN(BaseModel):
                 votes[exact_match] = zeros[exact_match]
                 remaining = ~exact_match
                 if remaining.any():
-                    votes[remaining] = distances[remaining, :1] / distances[remaining]
+                    votes[remaining] = (distances[remaining, :1] / distances[remaining]) ** self.vote_power
             totals = np.zeros((stop - start, len(self.classes_)), dtype=np.float64)
             for class_index in range(len(self.classes_)):
                 totals[:, class_index] = np.sum(votes * (labels == class_index), axis=1)
@@ -183,6 +226,12 @@ class KNN(BaseModel):
         return probabilities
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Memilih kelas dengan suara terbanyak; suara seri memilih kelas terkecil."""
+        """Memilih kelas dengan suara terbanyak; suara seri memilih kelas terkecil.
+
+        Jika ``threshold`` diisi pada data biner, kelas kedua dipilih saat peluangnya
+        minimal sebesar ambang tersebut.
+        """
         probabilities = self.predict_proba(X)
+        if self.threshold is not None and len(self.classes_) == 2:
+            return self.classes_[(probabilities[:, 1] >= self.threshold).astype(int)]
         return self.classes_[np.argmax(probabilities, axis=1)]
