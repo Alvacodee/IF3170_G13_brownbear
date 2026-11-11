@@ -163,6 +163,150 @@ def make_svm_preprocessor() -> Pipeline:
     return Pipeline([("features", FunctionTransformer(add_svm_features)), ("columns", columns)])
 
 
+# Pemesanan bersaudara: tanggal datang dan lama menginap sama, sedangkan lead time dan harga sedikit berbeda.
+SIBLING_KEY = ["arrival_year", "arrival_month", "arrival_day", "weekend_nights", "weekday_nights"]
+SIBLING_ATTRIBUTES = [
+    "booking_channel", "room_category", "meal_package", "num_adults", "num_children",
+    "special_requests", "needs_parking",
+]
+
+
+# Imputasi dari tetangga terdekat: https://doi.org/10.1080/713827181
+def impute_from_siblings(
+    reference: pd.DataFrame, frame: pd.DataFrame, column: str = "days_before_arrival"
+) -> pd.Series:
+    """Fill missing values from the most similar training booking with the same arrival and stay."""
+    values = frame[column].copy()
+    missing = values.isna()
+    if not missing.any():
+        return values
+    known = reference[reference[column].notna()]
+    stays = dict(list(known.groupby(SIBLING_KEY)))
+    arrivals = dict(list(known.groupby(SIBLING_KEY[:3])))
+    fallback = known[column].median()
+    for index in frame.index[missing]:
+        row = frame.loc[index]
+        group = stays.get(tuple(row[SIBLING_KEY]))
+        if group is None:
+            group = arrivals.get(tuple(row[SIBLING_KEY[:3]]))
+        if group is None:
+            values[index] = fallback
+            continue
+        score = np.zeros(len(group))
+        for attribute in SIBLING_ATTRIBUTES:
+            if pd.notna(row[attribute]):
+                score += ((group[attribute] != row[attribute]) & group[attribute].notna()).to_numpy(float)
+        if pd.notna(row["nightly_rate_idr"]):
+            gap = np.abs(np.log1p(group["nightly_rate_idr"].to_numpy()) - np.log1p(row["nightly_rate_idr"])) / 0.05
+            score += np.nan_to_num(gap, nan=2.0).clip(0, 3)
+        values[index] = group[column].to_numpy()[np.argmin(score)]
+    return values
+
+
+CATEGORY_LEVELS = {
+    "meal_package": ["Breakfast", "Room Only", "Half Board", "Full Board"],
+    "room_category": ["Type A", "Type B", "Type C", "Type D", "Type E", "Type F", "Type G"],
+    "booking_channel": ["Online Travel Agent", "Offline Agent", "Corporate", "Airline", "Complimentary"],
+}
+# Bobot hasil coordinate descent pada 5-fold CV; fitur berbobot 0 tidak dipakai.
+# Sumber: https://doi.org/10.1007/s10107-015-0892-3
+KNN_FEATURE_WEIGHTS = {
+    "arrival_day": 0.5, "month_sin": 0.5, "month_cos": 0.3, "days_before_arrival": 1.0,
+    "log_lead": 0.3, "booking_ordinal": 1.5, "nightly_rate_idr": 1.0, "log_rate": 1.0,
+    "weekend_nights": 0.5, "weekday_nights": 1.0, "num_adults": 0.5, "needs_parking": 1.0,
+    "is_returning_guest": 1.0, "prior_cancellations": 1.0, "prior_completed_bookings": 1.0,
+    "special_requests": 2.0, "meal_package_Full Board": 1.0,
+    "room_category_Type B": 1.0, "room_category_Type C": 0.5, "room_category_Type D": 1.0,
+    "room_category_Type E": 1.0, "room_category_Type F": 1.0,
+    "booking_channel_Online Travel Agent": 1.0, "booking_channel_Offline Agent": 0.6,
+    "booking_channel_Airline": 1.0, "booking_channel_Complimentary": 1.0,
+}
+# Penalti jarak jika ada atribut kelompok yang berbeda; nilai kosong tidak dihitung berbeda.
+KNN_MISMATCH_PENALTIES = {
+    ("arrival_year", "arrival_month", "arrival_day"): 0.5,
+    ("weekend_nights", "weekday_nights"): 0.5,
+    ("num_adults", "num_children"): 0.5,
+    ("room_category",): 0.2,
+    ("meal_package",): 0.5,
+    ("special_requests",): 0.1,
+    ("needs_parking",): 0.1,
+}
+# (kolom, toleransi, penalti): selisih di atas toleransi menambah jarak.
+KNN_TOLERANCES = [("days_before_arrival", 15.0, 1.5), ("log_rate", 0.05, 0.3)]
+
+
+def add_knn_features(features: pd.DataFrame) -> pd.DataFrame:
+    """Add arrival, lead-time, and price transforms plus one-hot categories for KNN."""
+    dates = pd.to_datetime(
+        {"year": features["arrival_year"], "month": features["arrival_month"], "day": features["arrival_day"]}
+    )
+    month = 2 * np.pi * features["arrival_month"] / 12
+    derived = pd.DataFrame({
+        "month_sin": np.sin(month),
+        "month_cos": np.cos(month),
+        "log_lead": np.log1p(features["days_before_arrival"]),
+        "booking_ordinal": (dates - pd.Timestamp("2023-01-01")).dt.days - features["days_before_arrival"],
+        "log_rate": np.log1p(features["nightly_rate_idr"]),
+    })
+    onehot = pd.DataFrame({
+        f"{column}_{level}": (features[column] == level).astype(float).where(features[column].notna())
+        for column, levels in CATEGORY_LEVELS.items() for level in levels
+    })
+    return pd.concat([features[NUMERIC_COLUMNS + BINARY_COLUMNS], derived, onehot], axis=1).astype(float)
+
+
+# Jarak campuran numerik dan kategorikal: https://doi.org/10.2307/2528823
+class KNNPreprocessor:
+    """Build the KNN matrix: weighted standardized features, then raw columns for distance penalties."""
+
+    def __init__(self, feature_weights: dict[str, float] | None = None) -> None:
+        self.feature_weights = KNN_FEATURE_WEIGHTS if feature_weights is None else feature_weights
+
+    def fit(self, frame: pd.DataFrame, y: object = None) -> "KNNPreprocessor":
+        features = select_features(frame)
+        self.reference_ = features[features["days_before_arrival"].notna()].copy()
+        self.columns_ = [column for column, weight in self.feature_weights.items() if weight > 0]
+        weighted = add_knn_features(self._impute(features))[self.columns_]
+        self.median_ = weighted.median()
+        filled = weighted.fillna(self.median_)
+        self.mean_, self.std_ = filled.mean(), filled.std().replace(0, 1)
+        self.weights_ = np.array([self.feature_weights[column] for column in self.columns_])
+        penalty_columns = [column for group in KNN_MISMATCH_PENALTIES for column in group]
+        self.feature_names_out_ = self.columns_ + [f"raw_{c}" for c in penalty_columns] + [
+            f"raw_{column}" for column, _, _ in KNN_TOLERANCES
+        ]
+        start = len(self.columns_)
+        self.mismatch_groups_ = []
+        for group, penalty in KNN_MISMATCH_PENALTIES.items():
+            self.mismatch_groups_.append((list(range(start, start + len(group))), penalty))
+            start += len(group)
+        self.tolerances_ = [(start + i, tolerance, penalty) for i, (_, tolerance, penalty) in enumerate(KNN_TOLERANCES)]
+        return self
+
+    def _impute(self, features: pd.DataFrame) -> pd.DataFrame:
+        return features.assign(days_before_arrival=impute_from_siblings(self.reference_, features))
+
+    def transform(self, frame: pd.DataFrame) -> np.ndarray:
+        features = select_features(frame)
+        weighted = add_knn_features(self._impute(features))[self.columns_].fillna(self.median_)
+        scaled = ((weighted - self.mean_) / self.std_).to_numpy() * self.weights_
+        raw = features.assign(**{
+            column: features[column].map({level: i for i, level in enumerate(levels)})
+            for column, levels in CATEGORY_LEVELS.items()
+        }).astype({column: float for column in CATEGORY_LEVELS})
+        raw["log_rate"] = np.log1p(raw["nightly_rate_idr"])
+        penalty = [column for group in KNN_MISMATCH_PENALTIES for column in group]
+        penalty += [column for column, _, _ in KNN_TOLERANCES]
+        return np.column_stack([scaled, raw[penalty].to_numpy(dtype=float)])
+
+    def fit_transform(self, frame: pd.DataFrame, y: object = None) -> np.ndarray:
+        return self.fit(frame).transform(frame)
+
+
+def make_knn_preprocessor(feature_weights: dict[str, float] | None = None) -> KNNPreprocessor:
+    return KNNPreprocessor(feature_weights)
+
+
 if __name__ == "__main__":
     row = dict.fromkeys(FEATURE_COLUMNS, 0)
     row.update(arrival_year=2024, arrival_month=1, arrival_day=1, meal_package="Breakfast", room_category="Type B", booking_channel="Corporate")
@@ -175,4 +319,6 @@ if __name__ == "__main__":
     nb = make_discrete_preprocessor().fit(train).transform(holdout)
     assert nb.dtype.kind in "iu" and (nb >= 0).all()
     assert make_svm_preprocessor().fit(train).transform(holdout).shape[0] == 1
+    knn_prep = make_knn_preprocessor().fit(train)
+    assert np.isfinite(knn_prep.transform(holdout)[:, : len(knn_prep.columns_)]).all()
     print("PASS: train-only imputation and model feature matrices")
