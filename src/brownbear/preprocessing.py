@@ -101,18 +101,24 @@ def _reserve_unknown_category(values: np.ndarray) -> np.ndarray:
     return values.astype(np.int64) + 1
 
 
+BINNED_COLUMNS = ["days_before_arrival", "nightly_rate_idr"]
+DISCRETE_COLUMNS = BINNED_COLUMNS + [column for column in FEATURE_COLUMNS if column not in BINNED_COLUMNS]
+
+
 def make_discrete_preprocessor(n_bins: int = 5) -> Pipeline:
-    """Bin continuous features and encode the rest as nonnegative categories."""
+    """Bin continuous features and encode the rest as nonnegative categories.
+
+    Output columns follow ``DISCRETE_COLUMNS``.
+    """
     # Sources: https://scikit-learn.org/stable/modules/naive_bayes.html#categorical-naive-bayes
     # https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.KBinsDiscretizer.html
     if n_bins < 2:
         raise ValueError("n_bins must be at least 2")
-    binned = ["days_before_arrival", "nightly_rate_idr"]
-    remaining = [column for column in NUMERIC_COLUMNS + BINARY_COLUMNS + CATEGORICAL_COLUMNS
-                 if column not in binned]
     encoded = ColumnTransformer([
-        ("binned", KBinsDiscretizer(n_bins=n_bins, encode="ordinal", strategy="quantile", quantile_method="linear"), binned),
-        ("categories", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1), remaining),
+        ("binned", KBinsDiscretizer(n_bins=n_bins, encode="ordinal", strategy="quantile", quantile_method="linear"),
+         BINNED_COLUMNS),
+        ("categories", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
+         DISCRETE_COLUMNS[len(BINNED_COLUMNS):]),
     ])
     return Pipeline([
         ("basic", make_basic_preprocessor()),
