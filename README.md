@@ -14,6 +14,7 @@ Tugas Besar 2 IF3170 Inteligensi Artifisial 2026/2027: klasifikasi pembatalan pe
 │   └── brownbear/
 │       ├── __init__.py
 │       ├── preprocessing.py
+│       ├── visualization.py      # graf Bayesian Network
 │       └── models/
 │           ├── __init__.py
 │           ├── base.py           # fit/predict dan save/load bersama
@@ -21,7 +22,7 @@ Tugas Besar 2 IF3170 Inteligensi Artifisial 2026/2027: klasifikasi pembatalan pe
 │           ├── dtl.py
 │           ├── logistic_regression.py
 │           ├── svm.py
-│           └── naive_bayes.py
+│           └── naive_bayes.py    # Naive Bayes dan Tree-Augmented Naive Bayes
 ├── pyproject.toml
 └── uv.lock
 ```
@@ -42,6 +43,7 @@ Dependensi dikelola melalui `pyproject.toml` dan dikunci di `uv.lock`. Preproces
 - [Optimasi proximal](https://web.stanford.edu/~boyd/papers/prox_algs.html) dan [akselerasi](https://epubs.siam.org/doi/10.1137/080716542) untuk Logistic Regression
 - [Pemilihan working set orde dua](https://jmlr.org/papers/v6/fan05a.html) untuk SVM
 - [Naive Bayes kategorikal](https://scikit-learn.org/stable/modules/naive_bayes.html#categorical-naive-bayes)
+- [Tree-Augmented Naive Bayes](https://doi.org/10.1023/A:1007465528199), [pohon dependensi Chow-Liu](https://doi.org/10.1109/TIT.1968.1054142), dan [algoritma Prim](https://doi.org/10.1002/j.1538-7305.1957.tb01515.x) untuk struktur Naive Bayes
 - [Preprocessing dan split](https://scikit-learn.org/stable/modules/compose.html)
 - [Jarak campuran numerik dan kategorikal](https://doi.org/10.2307/2528823) untuk penalti jarak KNN
 - [Imputasi berbasis tetangga terdekat](https://doi.org/10.1080/713827181) untuk `days_before_arrival`
