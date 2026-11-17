@@ -313,6 +313,56 @@ def make_knn_preprocessor(feature_weights: dict[str, float] | None = None) -> KN
     return KNNPreprocessor(feature_weights)
 
 
+# Fitur turunan untuk DTL. Pohon tidak butuh scaling/encoding: kategori tetap teks dan nilai kosong tetap NaN.
+TREE_DERIVED_COLUMNS = ["total_nights", "total_guests", "arrival_weekday", "arrival_ordinal", "booking_ordinal"]
+
+
+def add_tree_features(features: pd.DataFrame) -> pd.DataFrame:
+    """Add stay length, party size, weekday, and arrival/booking dates as day numbers."""
+    dates = pd.to_datetime(
+        {"year": features["arrival_year"], "month": features["arrival_month"], "day": features["arrival_day"]}
+    )
+    arrival_ordinal = (dates - pd.Timestamp("2023-01-01")).dt.days.astype(float)
+    return features.assign(
+        total_nights=features["weekend_nights"] + features["weekday_nights"],
+        total_guests=features["num_adults"] + features["num_children"],
+        arrival_weekday=dates.dt.day_of_week.astype(float),
+        arrival_ordinal=arrival_ordinal,
+        booking_ordinal=arrival_ordinal - features["days_before_arrival"],
+    )
+
+
+class TreePreprocessor:
+    """Prepare DTL input: sibling imputation of ``days_before_arrival`` and derived features.
+
+    Only ``days_before_arrival`` is imputed (from the training split); other missing values stay
+    NaN because the decision tree learns where they should go.
+    """
+
+    def __init__(self, derived: bool = True, sibling_imputation: bool = True) -> None:
+        self.derived = derived
+        self.sibling_imputation = sibling_imputation
+
+    def fit(self, frame: pd.DataFrame, y: object = None) -> "TreePreprocessor":
+        features = select_features(frame)
+        self.reference_ = features[features["days_before_arrival"].notna()].copy()
+        self.feature_names_out_ = FEATURE_COLUMNS + (TREE_DERIVED_COLUMNS if self.derived else [])
+        return self
+
+    def transform(self, frame: pd.DataFrame) -> pd.DataFrame:
+        features = select_features(frame)
+        if self.sibling_imputation:
+            features = features.assign(days_before_arrival=impute_from_siblings(self.reference_, features))
+        return add_tree_features(features) if self.derived else features
+
+    def fit_transform(self, frame: pd.DataFrame, y: object = None) -> pd.DataFrame:
+        return self.fit(frame).transform(frame)
+
+
+def make_tree_preprocessor(derived: bool = True, sibling_imputation: bool = True) -> TreePreprocessor:
+    return TreePreprocessor(derived, sibling_imputation)
+
+
 if __name__ == "__main__":
     row = dict.fromkeys(FEATURE_COLUMNS, 0)
     row.update(arrival_year=2024, arrival_month=1, arrival_day=1, meal_package="Breakfast", room_category="Type B", booking_channel="Corporate")
@@ -327,4 +377,6 @@ if __name__ == "__main__":
     assert make_svm_preprocessor().fit(train).transform(holdout).shape[0] == 1
     knn_prep = make_knn_preprocessor().fit(train)
     assert np.isfinite(knn_prep.transform(holdout)[:, : len(knn_prep.columns_)]).all()
+    tree = make_tree_preprocessor().fit(train).transform(holdout)
+    assert tree.shape == (1, len(FEATURE_COLUMNS) + len(TREE_DERIVED_COLUMNS)) and tree.loc[17, "room_category"] == "Type NEW"
     print("PASS: train-only imputation and model feature matrices")
