@@ -11,7 +11,15 @@ TAU = 1e-12
 
 # SMO dengan second-order working set selection.
 # Sumber: Fan, Chen, Lin (2005), https://jmlr.org/papers/v6/fan05a.html
+# Pembanding first-order (maximal violating pair): https://doi.org/10.1162/089976601300014493
 class SVM(BaseModel):
+    """Binary SVM trained by SMO on the dual problem.
+
+    ``selection`` picks the second index of each pair: ``"second_order"`` takes the
+    one with the largest guaranteed decrease of the dual objective, while
+    ``"first_order"`` takes the most violating index.
+    """
+
     def __init__(
         self,
         kernel: str = "gaussian",
@@ -23,9 +31,13 @@ class SVM(BaseModel):
         tol: float = 1e-3,
         max_iter: int = 1_000_000,
         cache_mb: int = 512,
+        selection: str = "second_order",
     ) -> None:
         if kernel not in ("linear", "polynomial", "gaussian"):
             raise ValueError(f"Unknown kernel: {kernel}")
+        if selection not in ("second_order", "first_order"):
+            raise ValueError(f"Unknown selection: {selection}")
+        self.selection = selection
         self.kernel = kernel
         self.C = C
         self.degree = degree
@@ -85,7 +97,7 @@ class SVM(BaseModel):
             gain = max_score - score[candidates]
             curvature = diagonal[i] + diagonal[candidates] - 2 * kernel_i[candidates]
             curvature[curvature <= 0] = TAU
-            best = (-(gain**2) / curvature).argmin()
+            best = (-(gain**2) / curvature).argmin() if self.selection == "second_order" else gain.argmax()
             j = candidates[best]
             kernel_j = kernel_row(j)
 

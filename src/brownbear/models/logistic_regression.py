@@ -7,17 +7,22 @@ from .base import BaseModel
 
 
 # Optimasi proximal: https://web.stanford.edu/~boyd/papers/prox_algs.html
-# Akselerasi: https://epubs.siam.org/doi/10.1137/080716542
+# Akselerasi (FISTA): https://epubs.siam.org/doi/10.1137/080716542
+# Restart adaptif: https://doi.org/10.1007/s10208-013-9150-3
 class LogisticRegression(BaseModel):
     """Binary weighted logistic regression with proximal L1/L2 optimization.
 
     Objective: mean weighted BCE + reg_strength *
     (rho * ||w||_1 + (1-rho) * ||w||_2**2 / 2). The intercept is unpenalized.
     Reference: https://web.stanford.edu/~boyd/papers/prox_algs.html
+
+    ``accelerate=False`` drops the momentum step, which leaves plain proximal
+    gradient descent.
     """
 
     def __init__(self, penalty="l2", reg_strength=1e-3, l1_ratio=.5,
-                 class_weight=None, max_iter=5000, tol=1e-6, threshold=.5):
+                 class_weight=None, max_iter=5000, tol=1e-6, threshold=.5,
+                 accelerate=True):
         self.penalty = penalty
         self.reg_strength = reg_strength
         self.l1_ratio = l1_ratio
@@ -25,6 +30,7 @@ class LogisticRegression(BaseModel):
         self.max_iter = max_iter
         self.tol = tol
         self.threshold = threshold
+        self.accelerate = accelerate
 
     @property
     def _rho(self):
@@ -62,6 +68,8 @@ class LogisticRegression(BaseModel):
             raise ValueError("max_iter must be a positive integer")
         if not np.isfinite(self.tol) or self.tol <= 0:
             raise ValueError("tol must be positive and finite")
+        if not isinstance(self.accelerate, (bool, np.bool_)):
+            raise TypeError("accelerate must be a boolean")
 
     @staticmethod
     def _weights(y, sample_weight):
@@ -134,7 +142,7 @@ class LogisticRegression(BaseModel):
                 extrapolated_w, extrapolated_b, momentum = w.copy(), b, 1.
                 continue
             mapping_norm = max(np.max(np.abs(dw), initial=0), abs(db)) / step
-            new_momentum = (1 + np.sqrt(1 + 4 * momentum ** 2)) / 2
+            new_momentum = (1 + np.sqrt(1 + 4 * momentum ** 2)) / 2 if self.accelerate else 1.
             extrapolated_w = new_w + (momentum - 1) / new_momentum * (new_w - w)
             extrapolated_b = new_b + (momentum - 1) / new_momentum * (new_b - b)
             momentum = new_momentum
