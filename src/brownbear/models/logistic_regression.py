@@ -7,23 +7,17 @@ from .base import BaseModel
 
 
 # Optimasi proximal: https://web.stanford.edu/~boyd/papers/prox_algs.html
-# Akselerasi (FISTA): https://epubs.siam.org/doi/10.1137/080716542
-# Restart adaptif: https://doi.org/10.1007/s10208-013-9150-3
+# Akselerasi: https://epubs.siam.org/doi/10.1137/080716542
 class LogisticRegression(BaseModel):
     """Binary weighted logistic regression with proximal L1/L2 optimization.
 
     Objective: mean weighted BCE + reg_strength *
     (rho * ||w||_1 + (1-rho) * ||w||_2**2 / 2). The intercept is unpenalized.
     Reference: https://web.stanford.edu/~boyd/papers/prox_algs.html
-
-    ``accelerate=False`` drops the momentum step, which leaves plain proximal
-    gradient descent. ``record_path=True`` stores every accepted iterate as
-    ``path_`` with columns (intercept, coef_0, coef_1, ...).
     """
 
     def __init__(self, penalty="l2", reg_strength=1e-3, l1_ratio=.5,
-                 class_weight=None, max_iter=5000, tol=1e-6, threshold=.5,
-                 accelerate=True, record_path=False):
+                 class_weight=None, max_iter=5000, tol=1e-6, threshold=.5):
         self.penalty = penalty
         self.reg_strength = reg_strength
         self.l1_ratio = l1_ratio
@@ -31,8 +25,6 @@ class LogisticRegression(BaseModel):
         self.max_iter = max_iter
         self.tol = tol
         self.threshold = threshold
-        self.accelerate = accelerate
-        self.record_path = record_path
 
     @property
     def _rho(self):
@@ -70,9 +62,6 @@ class LogisticRegression(BaseModel):
             raise ValueError("max_iter must be a positive integer")
         if not np.isfinite(self.tol) or self.tol <= 0:
             raise ValueError("tol must be positive and finite")
-        for name in ("accelerate", "record_path"):
-            if not isinstance(getattr(self, name), (bool, np.bool_)):
-                raise TypeError(f"{name} must be a boolean")
 
     @staticmethod
     def _weights(y, sample_weight):
@@ -122,7 +111,6 @@ class LogisticRegression(BaseModel):
         extrapolated_w, extrapolated_b, momentum = w.copy(), b, 1.
         smooth = self._smooth_loss(X, y, weights, w, b)
         self.loss_history_ = [float(smooth)]
-        path = [np.concatenate(([b], w))]
         self.converged_ = False
         l1 = self.reg_strength * self._rho
         for iteration in range(1, self.max_iter + 1):
@@ -146,13 +134,12 @@ class LogisticRegression(BaseModel):
                 extrapolated_w, extrapolated_b, momentum = w.copy(), b, 1.
                 continue
             mapping_norm = max(np.max(np.abs(dw), initial=0), abs(db)) / step
-            new_momentum = (1 + np.sqrt(1 + 4 * momentum ** 2)) / 2 if self.accelerate else 1.
+            new_momentum = (1 + np.sqrt(1 + 4 * momentum ** 2)) / 2
             extrapolated_w = new_w + (momentum - 1) / new_momentum * (new_w - w)
             extrapolated_b = new_b + (momentum - 1) / new_momentum * (new_b - b)
             momentum = new_momentum
             w, b, smooth = new_w, new_b, new_smooth
             self.loss_history_.append(objective)
-            path.append(np.concatenate(([b], w)))
             if mapping_norm <= self.tol:
                 self.converged_ = True
                 break
@@ -160,8 +147,6 @@ class LogisticRegression(BaseModel):
         self.classes_ = np.array([0, 1])
         self.n_features_in_ = X.shape[1]
         self.n_iter_ = iteration
-        if self.record_path:
-            self.path_ = np.array(path)
         if not self.converged_:
             warnings.warn(f"LogisticRegression did not converge in {self.max_iter} iterations",
                           RuntimeWarning, stacklevel=2)
