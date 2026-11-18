@@ -17,6 +17,9 @@ class NaiveBayes(BaseModel):
     alpha : float, default=1.0
         Smoothing strength added to every class-category count. Must be
         finite and positive.
+    threshold : float or None, default=None
+        For two classes, predict the second class when its probability is at
+        least ``threshold``. ``None`` predicts the most likely class.
 
     Notes
     -----
@@ -28,17 +31,22 @@ class NaiveBayes(BaseModel):
     is learned by ``TreeAugmentedNaiveBayes``.
     """
 
-    def __init__(self, alpha: float = 1.0) -> None:
+    def __init__(self, alpha: float = 1.0, threshold: float | None = None) -> None:
         """Create a categorical Naive Bayes classifier.
 
         Parameters
         ----------
         alpha : float, default=1.0
             Smoothing strength for conditional category probabilities.
+        threshold : float or None, default=None
+            Decision threshold on the second class probability.
         """
         if not np.isfinite(alpha) or alpha <= 0:
             raise ValueError("alpha must be finite and positive")
+        if threshold is not None and not 0 < threshold < 1:
+            raise ValueError("threshold must be None or between 0 and 1")
         self.alpha = float(alpha)
+        self.threshold = threshold
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> Self:
         """Fit class priors, feature parents, and smoothed conditional probabilities.
@@ -68,7 +76,9 @@ class NaiveBayes(BaseModel):
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Predict the most likely class for each row in ``X``."""
+        """Predict the most likely class, or apply ``threshold`` for two classes."""
+        if getattr(self, "threshold", None) is not None and len(self.classes_) == 2:
+            return self.classes_[(self.predict_proba(X)[:, 1] >= self.threshold).astype(int)]
         scores = self._joint_log_likelihood(X)
         return self.classes_[np.argmax(scores, axis=1)]
 
@@ -184,6 +194,8 @@ class TreeAugmentedNaiveBayes(NaiveBayes):
     ----------
     alpha : float, default=1.0
         Smoothing strength for conditional category probabilities.
+    threshold : float or None, default=None
+        Decision threshold on the second class probability.
     """
 
     def _learn_parents(self, X: np.ndarray, encoded_y: np.ndarray) -> np.ndarray:

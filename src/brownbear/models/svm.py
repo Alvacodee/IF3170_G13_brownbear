@@ -17,7 +17,8 @@ class SVM(BaseModel):
 
     ``selection`` picks the second index of each pair: ``"second_order"`` takes the
     one with the largest guaranteed decrease of the dual objective, while
-    ``"first_order"`` takes the most violating index.
+    ``"first_order"`` takes the most violating index. ``threshold`` moves the decision
+    value that separates the classes (0 is the usual boundary).
     """
 
     def __init__(
@@ -32,12 +33,14 @@ class SVM(BaseModel):
         max_iter: int = 1_000_000,
         cache_mb: int = 512,
         selection: str = "second_order",
+        threshold: float = 0.0,
     ) -> None:
         if kernel not in ("linear", "polynomial", "gaussian"):
             raise ValueError(f"Unknown kernel: {kernel}")
         if selection not in ("second_order", "first_order"):
             raise ValueError(f"Unknown selection: {selection}")
         self.selection = selection
+        self.threshold = threshold
         self.kernel = kernel
         self.C = C
         self.degree = degree
@@ -71,7 +74,8 @@ class SVM(BaseModel):
         return np.concatenate(scores) + self.bias_
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        return self.classes_[(self.decision_function(X) > 0).astype(int)]
+        threshold = getattr(self, "threshold", 0.0)
+        return self.classes_[(self.decision_function(X) > threshold).astype(int)]
 
     def _solve(self, X: np.ndarray, y: np.ndarray, upper: np.ndarray) -> tuple[np.ndarray, float]:
         alpha = np.zeros(len(X))
