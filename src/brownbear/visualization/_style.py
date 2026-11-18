@@ -16,8 +16,6 @@ FONT_SIZE = 8.5
 # Kelas 0 (tidak batal) biru, kelas 1 (batal) oranye.
 NEGATIVE_COLOR = np.array([0.86, 0.91, 0.96])
 POSITIVE_COLOR = np.array([0.96, 0.64, 0.38])
-NEGATIVE_POINT_COLOR = "#3f7cb8"
-POSITIVE_POINT_COLOR = "#e07b39"
 
 
 def draw_arrow(
