@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import StratifiedGroupKFold
@@ -105,10 +106,11 @@ BINNED_COLUMNS = ["days_before_arrival", "nightly_rate_idr"]
 DISCRETE_COLUMNS = BINNED_COLUMNS + [column for column in FEATURE_COLUMNS if column not in BINNED_COLUMNS]
 
 
-def make_discrete_preprocessor(n_bins: int = 5) -> Pipeline:
+def make_discrete_preprocessor(n_bins: int = 5, sibling_imputation: bool = False) -> Pipeline:
     """Bin continuous features and encode the rest as nonnegative categories.
 
-    Output columns follow ``DISCRETE_COLUMNS``.
+    Output columns follow ``DISCRETE_COLUMNS``. With ``sibling_imputation``, a missing
+    ``days_before_arrival`` is filled from a sibling booking before binning.
     """
     # Sources: https://scikit-learn.org/stable/modules/naive_bayes.html#categorical-naive-bayes
     # https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.KBinsDiscretizer.html
@@ -120,7 +122,8 @@ def make_discrete_preprocessor(n_bins: int = 5) -> Pipeline:
         ("categories", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
          DISCRETE_COLUMNS[len(BINNED_COLUMNS):]),
     ])
-    return Pipeline([
+    steps = [("siblings", SiblingImputer())] if sibling_imputation else []
+    return Pipeline(steps + [
         ("basic", make_basic_preprocessor()),
         ("encode", encoded),
         ("reserve_unknown", FunctionTransformer(_reserve_unknown_category)),
@@ -209,6 +212,86 @@ def impute_from_siblings(
     return values
 
 
+class SiblingImputer(BaseEstimator, TransformerMixin):
+    """Fill a missing ``days_before_arrival`` from the most similar training booking.
+
+    Only the rows seen in ``fit`` are used as references, so validation and test rows never
+    borrow from each other. Columns other than ``days_before_arrival`` pass through unchanged.
+    """
+
+    def fit(self, X: pd.DataFrame, y: object = None) -> "SiblingImputer":
+        features = select_features(X)
+        self.reference_ = features[features["days_before_arrival"].notna()].copy()
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        return X.assign(days_before_arrival=impute_from_siblings(self.reference_, select_features(X)))
+
+
+# Logistic Regression hanya bisa membentuk batas linear, jadi hubungan yang melengkung
+# dibentuk lewat transformasi log, one-hot musim, dan bin days_before_arrival.
+LINEAR_LOG_COLUMNS = ["days_before_arrival", "nightly_rate_idr", "prior_cancellations", "prior_completed_bookings"]
+LINEAR_SCALED_COLUMNS = [
+    "num_adults", "num_children", "weekend_nights", "weekday_nights", "special_requests",
+    "needs_parking", "is_returning_guest", "total_nights", "booking_ordinal",
+]
+LINEAR_ONEHOT_COLUMNS = CATEGORICAL_COLUMNS + ["arrival_month", "arrival_weekday", "arrival_year"]
+LINEAR_FLAGGED_COLUMNS = [
+    "days_before_arrival", "nightly_rate_idr", "special_requests", "meal_package", "room_category",
+    "num_adults", "num_children", "needs_parking",
+]
+
+
+def add_missing_flags(frame: pd.DataFrame) -> pd.DataFrame:
+    """Select the features and add a 0/1 column for every value that was missing."""
+    features = select_features(frame)
+    flags = features[LINEAR_FLAGGED_COLUMNS].isna().astype(float).add_prefix("missing_")
+    return pd.concat([features, flags], axis=1)
+
+
+def add_linear_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add log transforms, stay length, booking date, and arrival weekday."""
+    dates = pd.to_datetime({"year": frame["arrival_year"], "month": frame["arrival_month"],
+                            "day": frame["arrival_day"]})
+    arrival = (dates - pd.Timestamp("2023-01-01")).dt.days
+    return frame.assign(
+        total_nights=frame["weekend_nights"] + frame["weekday_nights"],
+        booking_ordinal=arrival - frame["days_before_arrival"],
+        arrival_weekday=dates.dt.day_of_week,
+        **{f"log_{column}": np.log1p(frame[column]) for column in LINEAR_LOG_COLUMNS},
+    )
+
+
+# Source: https://scikit-learn.org/stable/modules/preprocessing.html#discretization
+def make_linear_preprocessor(lead_bins: int = 10) -> Pipeline:
+    """Prepare logistic regression input.
+
+    Missing flags are taken before imputation, ``days_before_arrival`` is filled from sibling
+    bookings, skewed counts are log-transformed and standardized, categories and arrival
+    month, weekday, and year are one-hot encoded, and ``days_before_arrival`` is also cut into
+    ``lead_bins`` quantile bins so the model can follow its nonlinear effect.
+    """
+    numeric = Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())])
+    categories = Pipeline([("impute", SimpleImputer(strategy="most_frequent")),
+                           ("encode", OneHotEncoder(handle_unknown="ignore", sparse_output=False))])
+    transformers = [
+        ("numeric", numeric, [f"log_{column}" for column in LINEAR_LOG_COLUMNS] + LINEAR_SCALED_COLUMNS),
+        ("categories", categories, LINEAR_ONEHOT_COLUMNS),
+        ("flags", "passthrough", [f"missing_{column}" for column in LINEAR_FLAGGED_COLUMNS]),
+    ]
+    if lead_bins:
+        bins = Pipeline([("impute", SimpleImputer(strategy="median")),
+                         ("bin", KBinsDiscretizer(lead_bins, encode="onehot-dense", strategy="quantile",
+                                                  quantile_method="linear"))])
+        transformers.append(("lead_bins", bins, ["days_before_arrival"]))
+    return Pipeline([
+        ("flags", FunctionTransformer(add_missing_flags)),
+        ("siblings", SiblingImputer()),
+        ("derive", FunctionTransformer(add_linear_features)),
+        ("encode", ColumnTransformer(transformers)),
+    ])
+
+
 CATEGORY_LEVELS = {
     "meal_package": ["Breakfast", "Room Only", "Half Board", "Full Board"],
     "room_category": ["Type A", "Type B", "Type C", "Type D", "Type E", "Type F", "Type G"],
@@ -263,10 +346,21 @@ def add_knn_features(features: pd.DataFrame) -> pd.DataFrame:
 
 # Jarak campuran numerik dan kategorikal: https://doi.org/10.2307/2528823
 class KNNPreprocessor:
-    """Build the KNN matrix: weighted standardized features, then raw columns for distance penalties."""
+    """Build the KNN matrix: weighted standardized features, then raw columns for distance penalties.
 
-    def __init__(self, feature_weights: dict[str, float] | None = None) -> None:
+    ``mismatch_penalties`` and ``tolerances`` default to ``KNN_MISMATCH_PENALTIES`` and
+    ``KNN_TOLERANCES``.
+    """
+
+    def __init__(
+        self,
+        feature_weights: dict[str, float] | None = None,
+        mismatch_penalties: dict[tuple[str, ...], float] | None = None,
+        tolerances: list[tuple[str, float, float]] | None = None,
+    ) -> None:
         self.feature_weights = KNN_FEATURE_WEIGHTS if feature_weights is None else feature_weights
+        self.mismatch_penalties = KNN_MISMATCH_PENALTIES if mismatch_penalties is None else mismatch_penalties
+        self.tolerances = KNN_TOLERANCES if tolerances is None else tolerances
 
     def fit(self, frame: pd.DataFrame, y: object = None) -> "KNNPreprocessor":
         features = select_features(frame)
@@ -277,20 +371,23 @@ class KNNPreprocessor:
         filled = weighted.fillna(self.median_)
         self.mean_, self.std_ = filled.mean(), filled.std().replace(0, 1)
         self.weights_ = np.array([self.feature_weights[column] for column in self.columns_])
-        penalty_columns = [column for group in KNN_MISMATCH_PENALTIES for column in group]
-        self.feature_names_out_ = self.columns_ + [f"raw_{c}" for c in penalty_columns] + [
-            f"raw_{column}" for column, _, _ in KNN_TOLERANCES
-        ]
+        self.feature_names_out_ = self.columns_ + [f"raw_{column}" for column in self._penalty_columns()]
         start = len(self.columns_)
         self.mismatch_groups_ = []
-        for group, penalty in KNN_MISMATCH_PENALTIES.items():
+        for group, penalty in self.mismatch_penalties.items():
             self.mismatch_groups_.append((list(range(start, start + len(group))), penalty))
             start += len(group)
-        self.tolerances_ = [(start + i, tolerance, penalty) for i, (_, tolerance, penalty) in enumerate(KNN_TOLERANCES)]
+        self.tolerances_ = [(start + i, tolerance, penalty)
+                            for i, (_, tolerance, penalty) in enumerate(self.tolerances)]
         return self
 
     def _impute(self, features: pd.DataFrame) -> pd.DataFrame:
         return features.assign(days_before_arrival=impute_from_siblings(self.reference_, features))
+
+    def _penalty_columns(self) -> list[str]:
+        """Raw columns read by the mismatch groups, then by the tolerances."""
+        groups = [column for group in self.mismatch_penalties for column in group]
+        return groups + [column for column, _, _ in self.tolerances]
 
     def transform(self, frame: pd.DataFrame) -> np.ndarray:
         features = select_features(frame)
@@ -301,16 +398,18 @@ class KNNPreprocessor:
             for column, levels in CATEGORY_LEVELS.items()
         }).astype({column: float for column in CATEGORY_LEVELS})
         raw["log_rate"] = np.log1p(raw["nightly_rate_idr"])
-        penalty = [column for group in KNN_MISMATCH_PENALTIES for column in group]
-        penalty += [column for column, _, _ in KNN_TOLERANCES]
-        return np.column_stack([scaled, raw[penalty].to_numpy(dtype=float)])
+        return np.column_stack([scaled, raw[self._penalty_columns()].to_numpy(dtype=float)])
 
     def fit_transform(self, frame: pd.DataFrame, y: object = None) -> np.ndarray:
         return self.fit(frame).transform(frame)
 
 
-def make_knn_preprocessor(feature_weights: dict[str, float] | None = None) -> KNNPreprocessor:
-    return KNNPreprocessor(feature_weights)
+def make_knn_preprocessor(
+    feature_weights: dict[str, float] | None = None,
+    mismatch_penalties: dict[tuple[str, ...], float] | None = None,
+    tolerances: list[tuple[str, float, float]] | None = None,
+) -> KNNPreprocessor:
+    return KNNPreprocessor(feature_weights, mismatch_penalties, tolerances)
 
 
 # Fitur turunan untuk DTL. Pohon tidak butuh scaling/encoding: kategori tetap teks dan nilai kosong tetap NaN.
@@ -372,6 +471,8 @@ if __name__ == "__main__":
     assert basic.loc[17, "nightly_rate_idr"] == 50
     assert basic.loc[17, "room_category"] == "Type NEW"
     assert make_numeric_preprocessor().fit(train).transform(holdout).shape[0] == 1
+    assert np.isfinite(make_linear_preprocessor(lead_bins=2).fit(train).transform(holdout)).all()
+    assert (make_discrete_preprocessor(sibling_imputation=True).fit(train).transform(holdout) >= 0).all()
     nb = make_discrete_preprocessor().fit(train).transform(holdout)
     assert nb.dtype.kind in "iu" and (nb >= 0).all()
     assert make_svm_preprocessor().fit(train).transform(holdout).shape[0] == 1
