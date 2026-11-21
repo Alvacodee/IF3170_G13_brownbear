@@ -18,6 +18,9 @@ class LogisticRegression(BaseModel):
 
     ``accelerate=False`` drops the momentum step, which leaves plain proximal
     gradient descent.
+
+    For one feature, ``parameter_history_`` records (bias, weight) pairs
+    aligned with ``loss_history_``, starting from zero.
     """
 
     def __init__(self, penalty="l2", reg_strength=1e-3, l1_ratio=.5,
@@ -119,6 +122,7 @@ class LogisticRegression(BaseModel):
         extrapolated_w, extrapolated_b, momentum = w.copy(), b, 1.
         smooth = self._smooth_loss(X, y, weights, w, b)
         self.loss_history_ = [float(smooth)]
+        self.parameter_history_ = [(b, float(w[0]))] if X.shape[1] == 1 else []
         self.converged_ = False
         l1 = self.reg_strength * self._rho
         for iteration in range(1, self.max_iter + 1):
@@ -148,6 +152,8 @@ class LogisticRegression(BaseModel):
             momentum = new_momentum
             w, b, smooth = new_w, new_b, new_smooth
             self.loss_history_.append(objective)
+            if self.parameter_history_:
+                self.parameter_history_.append((float(b), float(w[0])))
             if mapping_norm <= self.tol:
                 self.converged_ = True
                 break
