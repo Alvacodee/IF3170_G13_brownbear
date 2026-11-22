@@ -35,7 +35,7 @@ Berikut macro F1 tiap model pada data validasi (20% dari `train.csv`):
 | SVM Linear | 0.768 |
 | Naive Bayes | 0.749 |
 
-KNN memberi hasil terbaik, jadi ketiga submisi Kaggle kami (`submission1.csv` sampai `submission3.csv`) memakai KNN dengan konfigurasi yang sedikit berbeda. Prediksi model *from scratch* hampir selalu sama dengan versi scikit-learn-nya. Tingkat kesamaannya 96% untuk KNN dan di atas 98% untuk model lainnya.
+KNN memberi hasil terbaik, jadi ketiga submisi Kaggle kami (`submission1.csv` sampai `submission3.csv`) memakai KNN dengan konfigurasi yang sedikit berbeda. Prediksi model *from scratch* hampir selalu sama dengan versi scikit-learn-nya, dengan tingkat kesamaan di atas 98%. Pengecualiannya KNN (97%), karena scikit-learn tidak mendukung penalti atribut yang kami tambahkan. Jika penalti itu dihilangkan, prediksi KNN kami sama persis dengan scikit-learn.
 
 Selain itu, notebook juga membahas beberapa hal berikut:
 
