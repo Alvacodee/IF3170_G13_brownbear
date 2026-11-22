@@ -146,4 +146,6 @@ def _short_split(model: DecisionTree, node: int, names) -> str:
         if extra > 0:
             shown[-1] += f", +{extra} lainnya"
         return f"{name} in\n{{" + ",\n".join(shown) + "}"
+    if np.isinf(model.threshold_[node]):
+        return f"{name}\nterisi"
     return f"{name}\n<= {model.threshold_[node]:.4g}"

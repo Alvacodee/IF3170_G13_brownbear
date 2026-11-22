@@ -267,11 +267,13 @@ class DecisionTree(BaseModel):
             missing = np.isnan(column)
             n_missing = int(missing.sum())
             present = np.flatnonzero(~missing)
-            if len(present) < 2:
+            if len(present) == 0:
                 continue
             missing_counts = Y[missing].sum(axis=0)
             values = column[present]
 
+            # Kandidat terakhir menaruh semua nilai terisi di kiri, sehingga nilai kosong
+            # bisa dipisah sendiri di kanan. Tanpa nilai kosong, kandidat ini gugur oleh min_leaf.
             if self.is_categorical_[feature]:
                 codes = values.astype(np.int64)
                 n_codes = len(self.categories_[feature])
@@ -279,19 +281,16 @@ class DecisionTree(BaseModel):
                 np.add.at(per_code, codes, Y[present])
                 raw_per_code = np.bincount(codes, minlength=n_codes)
                 observed = np.flatnonzero(raw_per_code > 0)
-                if len(observed) < 2:
-                    continue
                 # Urutan Breiman: proporsi bobot kelas positif per kategori.
                 share = per_code[observed, -1] / per_code[observed].sum(axis=1)
                 order = observed[np.argsort(share, kind="mergesort")]
-                left_counts = np.cumsum(per_code[order], axis=0)[:-1]
-                left_n = np.cumsum(raw_per_code[order])[:-1]
+                left_counts = np.cumsum(per_code[order], axis=0)
+                left_n = np.cumsum(raw_per_code[order])
             else:
                 order = np.argsort(values, kind="mergesort")
                 sorted_values = values[order]
                 boundaries = np.flatnonzero(sorted_values[:-1] < sorted_values[1:])
-                if len(boundaries) == 0:
-                    continue
+                boundaries = np.append(boundaries, len(present) - 1)
                 left_counts = np.cumsum(Y[present][order], axis=0)[boundaries]
                 left_n = boundaries + 1
 
@@ -318,14 +317,20 @@ class DecisionTree(BaseModel):
                         go_left = np.where(missing, missing_left, left_set[codes_or_zero])
                         best = (feature, np.nan, left_set, missing_left, go_left)
                     else:
-                        lower = sorted_values[boundaries[position]]
-                        upper = sorted_values[boundaries[position] + 1]
-                        threshold = lower + (upper - lower) / 2
-                        if threshold >= upper:  # tidak ada titik tengah yang dapat direpresentasikan
-                            threshold = lower
+                        threshold = self._midpoint(sorted_values, boundaries[position])
                         go_left = np.where(missing, missing_left, column <= threshold)
-                        best = (feature, float(threshold), None, missing_left, go_left)
+                        best = (feature, threshold, None, missing_left, go_left)
         return best
+
+    @staticmethod
+    def _midpoint(sorted_values: np.ndarray, boundary: int) -> float:
+        """Threshold di antara dua nilai terurut; ``inf`` untuk split nilai terisi vs kosong."""
+        if boundary == len(sorted_values) - 1:
+            return np.inf  # sama seperti scikit-learn untuk split terisi vs kosong
+        lower, upper = sorted_values[boundary], sorted_values[boundary + 1]
+        threshold = lower + (upper - lower) / 2
+        # Jika tidak ada titik tengah yang dapat direpresentasikan, pakai nilai bawah.
+        return float(lower if threshold >= upper else threshold)
 
     # ------------------------------------------------------------------ prediksi
     def _check_fitted(self) -> None:
@@ -405,6 +410,8 @@ class DecisionTree(BaseModel):
         if self.is_categorical_[feature]:
             chosen = self.categories_[feature][self.left_categories_[node]]
             return f"{name} in {{{', '.join(map(str, chosen))}}}"
+        if np.isinf(self.threshold_[node]):
+            return f"{name} terisi"
         return f"{name} <= {self.threshold_[node]:.6g}"
 
     # ------------------------------------------------------------------ cost-complexity pruning
@@ -535,3 +542,14 @@ if __name__ == "__main__":
     assert tree.predict(np.array([["NEW", np.nan]], dtype=object)).shape == (1,)
     assert np.allclose(tree.predict_proba(mixed).sum(axis=1), 1)
     print("PASS: optimal categorical split, missing values, and unseen categories")
+
+    # Nilai terisi vs kosong harus bisa menjadi split sendiri, seperti pada scikit-learn.
+    target = np.array([0, 0, 1, 1])
+    for column in ([1.0, 1.0, np.nan, np.nan], [1.0, 2.0, np.nan, np.nan]):
+        values = np.array(column).reshape(-1, 1)
+        tree = DecisionTree().fit(values, target)
+        assert (tree.predict(values) == target).all() and tree.n_leaves_ == 2
+        assert tree.predict(np.array([[5.0]])) == 0
+    categories = np.array([["a"], ["b"], [None], [None]], dtype=object)
+    assert (DecisionTree().fit(categories, target).predict(categories) == target).all()
+    print("PASS: present vs missing split")
